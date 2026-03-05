@@ -2,8 +2,6 @@ name: Weekly Oil Sync
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 10 * * 1'
 
 jobs:
   build:
@@ -17,11 +15,11 @@ jobs:
           python-version: '3.9'
 
       - name: Install dependencies
+        # AM ADĂUGAT openpyxl și pandas aici
         run: pip install pandas openpyxl requests
 
       - name: Run sync script
-        # MODIFICARE: Punem env la nivelul pasului de rulare
-        run: python sync_oil.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python sync_oil.py

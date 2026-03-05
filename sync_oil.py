@@ -3,18 +3,20 @@ import requests
 import os
 import sys
 
-# Preluăm variabilele
+# Preluăm variabilele din mediul GitHub
 URL = os.getenv("SUPABASE_URL")
 KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-# DEBUG: Verificăm dacă variabilele au ajuns în script
-if not URL:
-    print("EROARE: SUPABASE_URL este gol! Verifică YAML-ul și numele Secretului.")
-    sys.exit(1)
-if not KEY:
-    print("EROARE: SUPABASE_SERVICE_ROLE_KEY este gol!")
+# VERIFICARE CRITICĂ
+if not URL or not KEY:
+    print("-" * 50)
+    print("EROARE: GitHub Actions NU a transmis secretele către Python!")
+    print(f"SUPABASE_URL detectat: {'DA' if URL else 'NU (GOL)'}")
+    print(f"SUPABASE_KEY detectat: {'DA' if KEY else 'NU (GOL)'}")
+    print("-" * 50)
     sys.exit(1)
 
+# Curățăm URL-ul de eventuale spații sau slash-uri la final
 BASE_URL = URL.strip().rstrip('/')
 HEADERS = {
     "apikey": KEY,
@@ -26,23 +28,24 @@ HEADERS = {
 def sync_data():
     xl_url = "https://energy.ec.europa.eu/document/download/906e60ca-8b6a-44e7-8589-652854d2fd3f_en?filename=Weekly_Oil_Bulletin_Prices_History_maticni_4web.xlsx"
     
-    print(f"Sincronizare pornită către: {BASE_URL}")
+    print(f"Conectare la baza de date: {BASE_URL}")
     
     try:
-        # Obținem tipurile de combustibil
+        # 1. Testăm conexiunea prin preluarea ID-urilor
         r = requests.get(f"{BASE_URL}/rest/v1/fuel_types?select=id,slug", headers=HEADERS)
         r.raise_for_status()
         f_map = {item['slug']: item['id'] for item in r.json()}
         
-        # Procesare Excel (Prices with taxes)
+        # 2. Procesăm Excel-ul
         df = pd.read_excel(xl_url, sheet_name="Prices with taxes", header=None)
         countries = ["EU_", "EUR_", "AT_", "BE_", "BG_", "CY_", "CZ_", "DE_", "DK_", "EE_", "EL_", "ES_", "FI_", "FR_", "HR_", "HU_", "IE_", "IT_", "LT_", "LU_", "LV_", "MT_", "NL_", "PL_", "PT_", "RO_", "SE_", "SI_", "SK_"]
         fuel_offsets = {1: 'euro_95', 2: 'diesel', 3: 'heating_oil', 4: 'fuel_oil_low_sulphur', 5: 'fuel_oil_high_sulphur', 6: 'lpg'}
 
         payload = []
+        # Luăm ultimele 10 rânduri (cele mai recente săptămâni)
         for _, row in df.tail(10).iterrows():
             date = str(row[0]).split()[0]
-            if "-" not in date: continue
+            if len(date) < 10 or "-" not in date: continue
             
             for col_idx, cell in enumerate(row):
                 ctr = str(cell).strip()
@@ -54,17 +57,18 @@ def sync_data():
                                 "report_date": date,
                                 "country_code": ctr,
                                 "fuel_id": f_map[slug],
-                                "price_with_tax": float(val)
+                                "price_with_tax": float(val),
+                                "currency": "EUR"
                             })
 
         if payload:
             res = requests.post(f"{BASE_URL}/rest/v1/fuel_prices", json=payload, headers=HEADERS)
-            print(f"Status: {res.status_code}. Date inserate: {len(payload)}")
+            print(f"Succes! Status: {res.status_code}. Date trimise: {len(payload)}")
         else:
-            print("Nu s-au găsit date noi.")
+            print("Nu s-au găsit date noi în Excel.")
 
     except Exception as e:
-        print(f"Eroare: {e}")
+        print(f"Eroare procesare: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

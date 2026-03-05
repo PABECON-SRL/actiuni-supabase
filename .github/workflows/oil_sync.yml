@@ -1,0 +1,24 @@
+name: Weekly Oil Sync
+
+on:
+  schedule:
+    - cron: '0 10 * * 1' # În fiecare Luni la ora 10:00
+  workflow_dispatch: # Permite rularea manuală din buton
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: |
+          pip install pandas openpyxl requests
+      - name: Run sync script
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python sync_oil.py

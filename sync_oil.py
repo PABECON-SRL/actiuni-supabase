@@ -3,9 +3,8 @@ import requests
 import os
 
 # Configurații din Environment Variables
-SUPABASE_URL = os.getenv("https://dayatqybchaovtezmueo.supabase.co")
-SUPABASE_KEY = os.getenv("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRheWF0cXliY2hhb3Z0ZXptdWVvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTkzMTc1NSwiZXhwIjoyMDg3NTA3NzU1fQ.loJKAzilDnWoNemztZtSC2LeWQOBRBZW5psbFPxJxMk")
-
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 def sync_prices():
     url = "https://energy.ec.europa.eu/document/download/906e60ca-8b6a-44e7-8589-652854d2fd3f_en?filename=Weekly_Oil_Bulletin_Prices_History_maticni_4web.xlsx"
     

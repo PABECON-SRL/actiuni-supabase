@@ -14,7 +14,6 @@ HEADERS = {
     "apikey": KEY,
     "Authorization": f"Bearer {KEY}",
     "Content-Type": "application/json",
-    # ACEASTA ESTE CHEIA: "merge-duplicates" face UPSERT bazat pe Unique Constraints
     "Prefer": "resolution=merge-duplicates" 
 }
 
@@ -37,24 +36,26 @@ def clean_val(val):
         return None
 
 def sync_prices(f_map):
-    print("Sincronizare Prețuri...")
-    # Citim tab-urile
+    print("Sincronizare Prețuri (2020 - Prezent)...")
     df_with = pd.read_excel(XL_URL, sheet_name="Prices with taxes", header=None)
     df_wo = pd.read_excel(XL_URL, sheet_name="Prices wo taxes", header=None)
     
     price_data = {}
 
     def process_df(df, field_name):
-        # Scanăm doar ultimele 20 de rânduri pentru eficiență (datele noi)
-        for _, row in df.tail(20).iterrows():
+        # Scanăm tot tabelul, dar filtrăm în buclă
+        for _, row in df.iterrows():
             date = pd.to_datetime(row[0], errors='coerce')
-            if pd.isna(date) or date.year < 2000: continue
+            
+            # FILTRU TEMPORAL: Doar din 2020 încoace
+            if pd.isna(date) or date.year < 2020: 
+                continue
+                
             date_str = date.strftime('%Y-%m-%d')
 
             for col_idx, cell in enumerate(row):
                 ctr = str(cell).strip()
                 if ctr in COUNTRIES:
-                    # Gestionăm Exchange Rate (1.0 pentru Euro sau dacă lipsește)
                     ex_rate = clean_val(row[col_idx + 1])
                     if ex_rate is None: ex_rate = 1.0
                     
@@ -77,23 +78,22 @@ def sync_prices(f_map):
     
     payload = list(price_data.values())
     if payload:
-        res = requests.post(f"{BASE_URL}/rest/v1/fuel_prices", json=payload, headers=HEADERS)
-        print(f"Prices: {res.status_code}")
+        print(f"Trimit {len(payload)} rânduri de prețuri...")
+        # Trimitem în bucăți de 1000 pentru a nu bloca API-ul
+        for i in range(0, len(payload), 1000):
+            res = requests.post(f"{BASE_URL}/rest/v1/fuel_prices", json=payload[i:i+1000], headers=HEADERS)
+        print(f"Prices Sync: Gata.")
 
 def sync_taxes(f_map):
-    print("Sincronizare Taxe...")
-    tax_sheets = {
-        "VAT": "vat_rate_percent",
-        "Excise duties": "excise_duty_value",
-        "Other indirect taxes": "other_indirect_taxes"
-    }
+    print("Sincronizare Taxe (2020 - Prezent)...")
+    tax_sheets = {"VAT": "vat_rate_percent", "Excise duties": "excise_duty_value", "Other indirect taxes": "other_indirect_taxes"}
     
     merged_taxes = {}
     for sheet, column in tax_sheets.items():
         df = pd.read_excel(XL_URL, sheet_name=sheet, header=None)
-        for _, row in df.tail(15).iterrows():
+        for _, row in df.iterrows():
             date = pd.to_datetime(row[0], errors='coerce')
-            if pd.isna(date): continue
+            if pd.isna(date) or date.year < 2020: continue
             date_str = date.strftime('%Y-%m-%d')
 
             for col_idx, cell in enumerate(row):
@@ -109,15 +109,18 @@ def sync_taxes(f_map):
 
     payload = list(merged_taxes.values())
     if payload:
-        requests.post(f"{BASE_URL}/rest/v1/fuel_taxes", json=payload, headers=HEADERS)
+        for i in range(0, len(payload), 1000):
+            requests.post(f"{BASE_URL}/rest/v1/fuel_taxes", json=payload[i:i+1000], headers=HEADERS)
+        print(f"Taxes Sync: Gata.")
 
 def sync_consumption(f_map):
-    print("Sincronizare Consum...")
+    print("Sincronizare Consum (2020 - Prezent)...")
     df = pd.read_excel(XL_URL, sheet_name="Consumption", header=None)
     payload = []
-    for _, row in df.tail(5).iterrows():
+    for _, row in df.iterrows():
         try:
             year = int(row[0])
+            if year < 2020: continue
             for col_idx, cell in enumerate(row):
                 if str(cell).strip() in COUNTRIES:
                     ctr = str(cell).strip()
@@ -128,10 +131,11 @@ def sync_consumption(f_map):
         except: continue
     if payload:
         requests.post(f"{BASE_URL}/rest/v1/fuel_consumption", json=payload, headers=HEADERS)
+        print(f"Consumption Sync: Gata.")
 
 if __name__ == "__main__":
     f_map = get_fuel_map()
     sync_prices(f_map)
     sync_taxes(f_map)
     sync_consumption(f_map)
-    print("Sincronizare finalizată cu succes!")
+    print("Misiune finalizată: Datele din 2020 până în prezent au fost sincronizate.")

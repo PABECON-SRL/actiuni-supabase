@@ -86,7 +86,7 @@ def sync_prices(f_map):
 
 def sync_taxes(f_map):
     print("Sincronizare Taxe (2020 - Prezent)...")
-    tax_sheets = {"VAT": "vat_rate_percent", "Excise duties": "excise_duty_value", "Other indirect taxes": "other_indirect_taxes"}
+    tax_sheets = {"VAT": "vat_rate_percent", "Excise duties": "excise_duty_value", "Other Indirect Taxes": "other_indirect_taxes"}
     
     merged_taxes = {}
     for sheet, column in tax_sheets.items():

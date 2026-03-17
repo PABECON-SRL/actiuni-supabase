@@ -16,8 +16,8 @@ HEADERS = {
     "apikey": KEY,
     "Authorization": f"Bearer {KEY}",
     "Content-Type": "application/json",
-    # MODIFICARE CRITICĂ: Specificăm coloanele pentru ON CONFLICT
-    "Prefer": "resolution=merge-duplicates, return=minimal" 
+    # REPARARE: Adăugăm on_conflict pentru a specifica cheia unică
+    "Prefer": "resolution=merge-duplicates" 
 }
 
 COUNTRIES = ["EU_", "EUR_", "AT_", "BE_", "BG_", "CY_", "CZ_", "DE_", "DK_", "EE_", "EL_", "ES_", "FI_", "FR_", "HR_", "HU_", "IE_", "IT_", "LT_", "LU_", "LV_", "MT_", "NL_", "PL_", "PT_", "RO_", "SE_", "SI_", "SK_"]
@@ -54,8 +54,9 @@ def sync_prices(f_map, fb):
     price_data = {}
 
     def process_df(df, field):
-        for i, row in df.iterrows():
-            if i < 3: continue 
+        # Scanăm DOAR ultimele 50 de rânduri pentru a fi rapizi și a evita 409 pe mii de rânduri inutile
+        # Dacă vrei tot istoricul, înlocuiește df.tail(50) cu df
+        for i, row in df.tail(100).iterrows():
             date = force_parse_date(row[0])
             if date is None or date.year < 2020: continue
             
@@ -76,14 +77,9 @@ def sync_prices(f_map, fb):
                                         "country_code": ctr, 
                                         "fuel_id": f_map[slug], 
                                         "currency": "EUR", 
-                                        "exchange_rate": ex_rate,
-                                        "price_with_tax": None, # Inițializare
-                                        "price_wo_tax": None    # Inițializare
+                                        "exchange_rate": ex_rate
                                     }
                                 price_data[key][field] = val
-                                # Ne asigurăm că rata de schimb e luată din tabelul cu taxe dacă e disponibilă
-                                if field == "price_with_tax":
-                                    price_data[key]["exchange_rate"] = ex_rate
                         except: continue
 
     process_df(df_with, "price_with_tax")
@@ -92,17 +88,20 @@ def sync_prices(f_map, fb):
     payload = list(price_data.values())
     if payload:
         payload.sort(key=lambda x: x['report_date'], reverse=True)
-        print(f"TRIMIT DATE. ULTIMA DATA: {payload[0]['report_date']}")
+        print(f"TRIMIT DATE RECENTE. CEA MAI NOUĂ: {payload[0]['report_date']}")
         
-        # Trimitem în tranșe
-        for i in range(0, len(payload), 500):
-            batch = payload[i:i+500]
-            res = requests.post(f"{BASE_URL}/rest/v1/fuel_prices", json=batch, headers=HEADERS)
-            print(f"Batch {i//500 + 1} | Status: {res.status_code}")
+        # Specificăm on_conflict în URL pentru a rezolva eroarea 409
+        upsert_url = f"{BASE_URL}/rest/v1/fuel_prices?on_conflict=report_date,country_code,fuel_id"
+        
+        for i in range(0, len(payload), 100):
+            batch = payload[i:i+100]
+            res = requests.post(upsert_url, json=batch, headers=HEADERS)
             if res.status_code >= 400:
-                print(f"DETALII EROARE: {res.text}")
+                print(f"Batch {i//100 + 1} | Status: {res.status_code} | Eroare: {res.text}")
+            else:
+                print(f"Batch {i//100 + 1} | Status: {res.status_code} (Succes/Update)")
     else:
-        print("EROARE: Payload gol.")
+        print("EROARE: Nu s-au găsit date.")
 
 if __name__ == "__main__":
     f_map = get_fuel_map()
@@ -110,4 +109,3 @@ if __name__ == "__main__":
     resp = requests.get(XL_URL, headers={'User-Agent': 'Mozilla/5.0'}, timeout=60)
     fb = io.BytesIO(resp.content)
     sync_prices(f_map, fb)
-    print("Finalizat.")

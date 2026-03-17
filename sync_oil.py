@@ -2,6 +2,7 @@ import pandas as pd
 import requests
 import os
 import sys
+import time # Importăm time pentru cache busting
 
 URL = os.getenv("SUPABASE_URL")
 KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -10,7 +11,7 @@ if not URL or not KEY:
     sys.exit("EROARE: Variabilele de mediu lipsesc.")
 
 BASE_URL = URL.strip().rstrip('/')
-HEADERS = {
+HEADERS_SUPABASE = {
     "apikey": KEY,
     "Authorization": f"Bearer {KEY}",
     "Content-Type": "application/json",
@@ -20,10 +21,13 @@ HEADERS = {
 # Configurații
 COUNTRIES = ["EU_", "EUR_", "AT_", "BE_", "BG_", "CY_", "CZ_", "DE_", "DK_", "EE_", "EL_", "ES_", "FI_", "FR_", "HR_", "HU_", "IE_", "IT_", "LT_", "LU_", "LV_", "MT_", "NL_", "PL_", "PT_", "RO_", "SE_", "SI_", "SK_"]
 FUEL_SLUGS = ['euro_95', 'diesel', 'heating_oil', 'fuel_oil_low_sulphur', 'fuel_oil_high_sulphur', 'lpg']
-XL_URL = "https://energy.ec.europa.eu/document/download/906e60ca-8b6a-44e7-8589-652854d2fd3f_en?filename=Weekly_Oil_Bulletin_Prices_History_maticni_4web.xlsx"
+
+# Link-ul de download cu cache busting
+# Adăugăm &t=[timestamp] ca să fim siguri că luăm fișierul nou de pe serverul CE
+XL_URL = f"https://energy.ec.europa.eu/document/download/906e60ca-8b6a-44e7-8589-652854d2fd3f_en?filename=Weekly_Oil_Bulletin_Prices_History_maticni_4web.xlsx&t={int(time.time())}"
 
 def get_fuel_map():
-    r = requests.get(f"{BASE_URL}/rest/v1/fuel_types?select=id,slug", headers=HEADERS)
+    r = requests.get(f"{BASE_URL}/rest/v1/fuel_types?select=id,slug", headers=HEADERS_SUPABASE)
     r.raise_for_status()
     return {item['slug']: item['id'] for item in r.json()}
 
@@ -35,19 +39,25 @@ def clean_val(val):
     except:
         return None
 
-def sync_prices(f_map):
+def download_file(url):
+    # Folosim un User-Agent de browser pentru a evita livrarea unei versiuni vechi/cached
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    return response.content
+
+def sync_prices(f_map, file_content):
     print("Sincronizare Prețuri (2020 - Prezent)...")
-    df_with = pd.read_excel(XL_URL, sheet_name="Prices with taxes", header=None)
-    df_wo = pd.read_excel(XL_URL, sheet_name="Prices wo taxes", header=None)
+    df_with = pd.read_excel(file_content, sheet_name="Prices with taxes", header=None)
+    df_wo = pd.read_excel(file_content, sheet_name="Prices wo taxes", header=None)
     
     price_data = {}
 
     def process_df(df, field_name):
-        # Scanăm tot tabelul, dar filtrăm în buclă
         for _, row in df.iterrows():
             date = pd.to_datetime(row[0], errors='coerce')
-            
-            # FILTRU TEMPORAL: Doar din 2020 încoace
             if pd.isna(date) or date.year < 2020: 
                 continue
                 
@@ -78,44 +88,44 @@ def sync_prices(f_map):
     
     payload = list(price_data.values())
     if payload:
-        print(f"Trimit {len(payload)} rânduri de prețuri...")
-        # Trimitem în bucăți de 1000 pentru a nu bloca API-ul
+        print(f"Detectat date. Exemplu data recentă: {payload[-1]['report_date']}")
+        print(f"Trimit {len(payload)} rânduri către Supabase...")
         for i in range(0, len(payload), 1000):
-            res = requests.post(f"{BASE_URL}/rest/v1/fuel_prices", json=payload[i:i+1000], headers=HEADERS)
+            requests.post(f"{BASE_URL}/rest/v1/fuel_prices", json=payload[i:i+1000], headers=HEADERS_SUPABASE)
         print(f"Prices Sync: Gata.")
 
-def sync_taxes(f_map):
-    print("Sincronizare Taxe (2020 - Prezent)...")
+# ... (funcțiile sync_taxes și sync_consumption rămân la fel, dar primesc file_content)
+
+def sync_taxes(f_map, file_content):
+    print("Sincronizare Taxe...")
     tax_sheets = {"VAT": "vat_rate_percent", "Excise duties": "excise_duty_value", "Other Indirect Taxes": "other_indirect_taxes"}
-    
     merged_taxes = {}
     for sheet, column in tax_sheets.items():
-        df = pd.read_excel(XL_URL, sheet_name=sheet, header=None)
-        for _, row in df.iterrows():
-            date = pd.to_datetime(row[0], errors='coerce')
-            if pd.isna(date) or date.year < 2020: continue
-            date_str = date.strftime('%Y-%m-%d')
-
-            for col_idx, cell in enumerate(row):
-                ctr = str(cell).strip()
-                if ctr in COUNTRIES:
-                    for offset, slug in enumerate(FUEL_SLUGS):
-                        val = clean_val(row[col_idx + offset + 1])
-                        if val is not None:
-                            key = (date_str, ctr, f_map[slug])
-                            if key not in merged_taxes:
-                                merged_taxes[key] = {"applicable_from": date_str, "country_code": ctr, "fuel_id": f_map[slug]}
-                            merged_taxes[key][column] = val
-
+        try:
+            df = pd.read_excel(file_content, sheet_name=sheet, header=None)
+            for _, row in df.iterrows():
+                date = pd.to_datetime(row[0], errors='coerce')
+                if pd.isna(date) or date.year < 2020: continue
+                date_str = date.strftime('%Y-%m-%d')
+                for col_idx, cell in enumerate(row):
+                    ctr = str(cell).strip()
+                    if ctr in COUNTRIES:
+                        for offset, slug in enumerate(FUEL_SLUGS):
+                            val = clean_val(row[col_idx + offset + 1])
+                            if val is not None:
+                                key = (date_str, ctr, f_map[slug])
+                                if key not in merged_taxes:
+                                    merged_taxes[key] = {"applicable_from": date_str, "country_code": ctr, "fuel_id": f_map[slug]}
+                                merged_taxes[key][column] = val
+        except: continue
     payload = list(merged_taxes.values())
     if payload:
         for i in range(0, len(payload), 1000):
-            requests.post(f"{BASE_URL}/rest/v1/fuel_taxes", json=payload[i:i+1000], headers=HEADERS)
-        print(f"Taxes Sync: Gata.")
+            requests.post(f"{BASE_URL}/rest/v1/fuel_taxes", json=payload[i:i+1000], headers=HEADERS_SUPABASE)
 
-def sync_consumption(f_map):
-    print("Sincronizare Consum (2020 - Prezent)...")
-    df = pd.read_excel(XL_URL, sheet_name="Consumption", header=None)
+def sync_consumption(f_map, file_content):
+    print("Sincronizare Consum...")
+    df = pd.read_excel(file_content, sheet_name="Consumption", header=None)
     payload = []
     for _, row in df.iterrows():
         try:
@@ -130,12 +140,18 @@ def sync_consumption(f_map):
                             payload.append({"year": year, "country_code": ctr, "fuel_id": f_map[slug], "quantity": qty})
         except: continue
     if payload:
-        requests.post(f"{BASE_URL}/rest/v1/fuel_consumption", json=payload, headers=HEADERS)
-        print(f"Consumption Sync: Gata.")
+        requests.post(f"{BASE_URL}/rest/v1/fuel_consumption", json=payload, headers=HEADERS_SUPABASE)
 
 if __name__ == "__main__":
+    # 1. Luăm maparea combustibililor
     f_map = get_fuel_map()
-    sync_prices(f_map)
-    sync_taxes(f_map)
-    sync_consumption(f_map)
-    print("Misiune finalizată: Datele din 2020 până în prezent au fost sincronizate.")
+    
+    # 2. Descărcăm fișierul o singură dată în memorie cu Cache Busting
+    print(f"Descarc fișierul de la: {XL_URL}")
+    file_content = download_file(XL_URL)
+    
+    # 3. Procesăm totul folosind același conținut descărcat
+    sync_prices(f_map, file_content)
+    sync_taxes(f_map, file_content)
+    sync_consumption(f_map, file_content)
+    print("Misiune finalizată!")

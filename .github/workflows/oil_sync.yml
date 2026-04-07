@@ -1,6 +1,9 @@
 name: Weekly Oil Sync
 
 on:
+   schedule:
+    # Rulează în fiecare zi la ora 08:00 UTC
+    - cron: '0 8 * * *'
   workflow_dispatch:
 
 jobs:
